@@ -56,6 +56,7 @@ func TestFromEnvironment(t *testing.T) {
 	proxyFromEnvTests := []proxyFromEnvTest{
 		{allProxyEnv: "127.0.0.1:8080", noProxyEnv: "localhost, 127.0.0.1", wantTypeOf: direct{}},
 		{allProxyEnv: "ftp://example.com:8000", noProxyEnv: "localhost, 127.0.0.1", wantTypeOf: direct{}},
+		{allProxyEnv: "http://example.com:8000", wantTypeOf: direct{}},
 		{allProxyEnv: "socks5://example.com:8080", noProxyEnv: "localhost, 127.0.0.1", wantTypeOf: &PerHost{}},
 		{allProxyEnv: "socks5h://example.com", wantTypeOf: &socks.Dialer{}},
 		{allProxyEnv: "irc://example.com:8000", wantTypeOf: dummyDialer{}},
@@ -72,6 +73,64 @@ func TestFromEnvironment(t *testing.T) {
 		if got, want := fmt.Sprintf("%T", d), fmt.Sprintf("%T", tt.wantTypeOf); got != want {
 			t.Errorf("%v: got type = %T, want %T", tt, d, tt.wantTypeOf)
 		}
+	}
+}
+
+// TestFromEnvironmentStripsCredentials verifies that credentials embedded in
+// a proxy environment variable never reach the dialer. The environment is not
+// trusted to identify the proxy, so its embedded identity must be ignored;
+// credentials can only be supplied through FromURL with an explicit URL.
+func TestFromEnvironmentStripsCredentials(t *testing.T) {
+	ResetProxyEnv()
+
+	var seenAuth *Auth
+	RegisterDialerType("envauth", func(u *url.URL, _ Dialer) (Dialer, error) {
+		if u.User != nil {
+			seenAuth = &Auth{User: u.User.Username()}
+			if p, ok := u.User.Password(); ok {
+				seenAuth.Password = p
+			}
+		}
+		return direct{}, nil
+	})
+
+	os.Setenv("ALL_PROXY", "envauth://user:password@example.com:1080")
+	ResetCachedEnvironment()
+
+	d := FromEnvironment()
+	if got, want := fmt.Sprintf("%T", d), fmt.Sprintf("%T", direct{}); got != want {
+		t.Fatalf("got dialer type %T, want %T", d, direct{})
+	}
+	if seenAuth != nil {
+		t.Errorf("credentials from environment were forwarded: %+v", seenAuth)
+	}
+}
+
+// TestFromURLAcceptsExplicitCredentials verifies that credentials supplied
+// through an explicit, caller-constructed URL are still honored by FromURL.
+func TestFromURLAcceptsExplicitCredentials(t *testing.T) {
+	ResetProxyEnv()
+
+	var seenAuth *Auth
+	RegisterDialerType("urlauth", func(u *url.URL, _ Dialer) (Dialer, error) {
+		if u.User != nil {
+			seenAuth = &Auth{User: u.User.Username()}
+			if p, ok := u.User.Password(); ok {
+				seenAuth.Password = p
+			}
+		}
+		return direct{}, nil
+	})
+
+	u, err := url.Parse("urlauth://user:password@example.com:1080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FromURL(u, Direct); err != nil {
+		t.Fatalf("FromURL: %v", err)
+	}
+	if seenAuth == nil || seenAuth.User != "user" || seenAuth.Password != "password" {
+		t.Errorf("explicit credentials not honored, got %+v", seenAuth)
 	}
 }
 

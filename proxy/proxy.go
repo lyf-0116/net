@@ -47,6 +47,17 @@ func FromEnvironmentUsing(forward Dialer) Dialer {
 	if err != nil {
 		return forward
 	}
+	// The environment is not a trusted source of proxy identity: another
+	// layer in the process environment can rewrite these variables, so a
+	// proxy URL pulled from it may point at an impersonating proxy, and any
+	// credentials embedded in it are unauthenticated. Reject schemes that
+	// are not known proxy schemes and drop any embedded credentials so that
+	// they are never forwarded to an unverified proxy. Credentials must be
+	// supplied through explicit, trusted configuration via FromURL instead.
+	if !isKnownProxyScheme(proxyURL.Scheme) {
+		return forward
+	}
+	proxyURL.User = nil
 	proxy, err := FromURL(proxyURL, forward)
 	if err != nil {
 		return forward
@@ -60,6 +71,23 @@ func FromEnvironmentUsing(forward Dialer) Dialer {
 	perHost := NewPerHost(proxy, forward)
 	perHost.AddFromString(noProxy)
 	return perHost
+}
+
+// isKnownProxyScheme reports whether scheme names a proxy scheme that is
+// either built in (see FromURL) or registered through RegisterDialerType.
+// It is used to reject non-proxy URLs found in proxy environment variables
+// instead of treating the variable value as an opaque string.
+func isKnownProxyScheme(scheme string) bool {
+	switch scheme {
+	case "socks5", "socks5h":
+		return true
+	}
+	if proxySchemes != nil {
+		if _, ok := proxySchemes[scheme]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // proxySchemes is a map from URL schemes to a function that creates a Dialer
