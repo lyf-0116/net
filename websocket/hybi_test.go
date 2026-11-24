@@ -168,6 +168,54 @@ Sec-WebSocket-Protocol: chat
 	}
 }
 
+func TestHybiClientHandshakeBadAccept(t *testing.T) {
+	type test struct {
+		name    string
+		accept  string
+		wantErr error
+	}
+	tests := []test{
+		{
+			name:    "mismatched accept",
+			accept:  "Sec-WebSocket-Accept: yvMxV7T2k5mK+p3fWo3oe76fqWM=\r\n",
+			wantErr: ErrChallengeResponse,
+		},
+		{
+			name:    "missing accept",
+			accept:  "",
+			wantErr: ErrChallengeResponse,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := bytes.NewBuffer([]byte{})
+			bw := bufio.NewWriter(b)
+			br := bufio.NewReader(strings.NewReader("HTTP/1.1 101 Switching Protocols\r\n" +
+				"Upgrade: websocket\r\n" +
+				"Connection: Upgrade\r\n" +
+				tt.accept +
+				"\r\n"))
+			config := new(Config)
+			var err error
+			config.Location, err = url.ParseRequestURI("ws://server.example.com/chat")
+			if err != nil {
+				t.Fatal("location url", err)
+			}
+			config.Origin, err = url.ParseRequestURI("http://example.com")
+			if err != nil {
+				t.Fatal("origin url", err)
+			}
+			config.Version = ProtocolVersionHybi13
+			config.handshakeData = map[string]string{
+				"key": "dGhlIHNhbXBsZSBub25jZQ==",
+			}
+			if err := hybiClientHandshake(config, br, bw); err != tt.wantErr {
+				t.Fatalf("handshake expected err %q but got %q", tt.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestHybiServerHandshake(t *testing.T) {
 	config := new(Config)
 	handshaker := &hybiServerHandshaker{Config: config}
